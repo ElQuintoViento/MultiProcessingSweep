@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 from multiprocessing import JoinableQueue, Process, Queue, cpu_count
+import re
 import sys
 from time import time
 
@@ -89,6 +90,15 @@ class SweepConsumer(Process):
         print("{} FINISHED".format(self.name))
 
 
+def overwrite_print(txt, first_print):
+    if first_print:
+        overwrite_count = len(re.findall(r'\n', txt)) + 1
+        for i in range(0, overwrite_count):
+            # Move cursor up one line
+            sys.stdout.write("\033[F")
+    print(txt)
+
+
 def sort_and_reduce(lst, size, sort_by_attr):
     lst.sort(key=lambda x: x.__dict__[sort_by_attr])
     if len(lst) > size:
@@ -136,44 +146,53 @@ def run_sweep(function, params_lists_list, tuples_list, **kwargs):
     for c in consumers:
         c.start()
     #
-    print("Added 0 of {} param combinations".format(size))
+    overwrite_print(
+        "Added 0 of {} param combinations".format(size), False)
     params_list = []
     results = []
-    for i in xrange(0, size):
+    # setup large list
+    param_combinations = [0]
+    if sys.version_info >= (3, 0):
+        param_combinations = range(0, size)
+    else:
+        param_combinations = xrange(0, size)
+    #
+    for i in param_combinations:
         params = []
         for j in range(0, len(params_lists_list)):
-            index = (i / divisors[j]) % len(params_lists_list[j])
+            index = int(i / divisors[j]) % len(params_lists_list[j])
             params.append(params_lists_list[j][index])
-        # print("\t{} \t {}".format(i, str(params)))
         params_list.append(params)
         count += 1
         #
         if count >= group_count:
-            # print(" - - - - - - - - - -\n{}\n".format(params_list))
             task_queue.put(
                 SweepTask(
                     function, params_list, tuples_list, top_n, order_every_n))
             task_count += 1
             params_list = []
             count = 0
-            # Wait ?
-            # while task_queue.qsize() > (3 * len(consumers)):
-            #    continue
             #
-            sys.stdout.write("\033[F")
-            print("Added {} of {} param combinations".format(i, size))
+            overwrite_print(
+                "Added {} of {} param combinations".format(i, size), True)
+        #
+        if task_count >= (number_of_consumers * 5):
+            while task_count > (number_of_consumers * 3):
+                # Block until received a result
+                result = result_queue.get(True)
+                results += result
+                task_count -= 1
+                #
+                if len(results) > order_every_n:
+                    sort_and_reduce(results, top_n, 'error')
     #
     if count > 0:
-        # print(" - - - - - - - - - -\n{}\n".format(params_list))
         task_queue.put(
             SweepTask(
                 function, params_list, tuples_list, top_n, order_every_n))
         task_count += 1
     # Start sorting our results
-    print("Getting results 0%")
     for i in range(0, task_count):
-        sys.stdout.write("\033[F")
-        print("Getting results {:.2f}%".format(float(i) / float(task_count)))
         result = result_queue.get(True)
         results += result
         #
